@@ -101,6 +101,12 @@ def make_gui_parser():
         help="Include this machine's own IP address(es) in the scan. By default the "
              "scanning host is auto-detected and excluded."
     )
+    scan_p.add_argument(
+        "--deep", "--deep-inspection", action="store_true", default=None,
+        dest="deep_inspection",
+        help="Enable deep active OT protocol inspection (CIP Backplane Chassis enumeration, "
+             "Siemens S7comm keyswitch & SZL security levels, Modbus TCP MEI device identification)."
+    )
 
     # --- diff ---
     diff_p = subparsers.add_parser("diff", help="Compare two saved scan snapshots")

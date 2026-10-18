@@ -131,7 +131,7 @@ def _run_probe(host, name, cmd, timeout, verbose, ports=""):
 
 
 def _fingerprint_host(host, verbose=False, script_timeout=30, pacing=None,
-                      version_intensity=None):
+                      version_intensity=None, deep_inspection=False):
 
     host["evidence"] = []
     host["probes"] = []
@@ -159,46 +159,47 @@ def _fingerprint_host(host, verbose=False, script_timeout=30, pacing=None,
     #
     if "S7" in protocols:
         s7_handled = False
-        try:
-            # 1. Primary: Native read-only S7comm SZL inspection (0x0011, 0x001C, 0x0132)
-            s7_data = s7.query_s7_info(ip, timeout=min(script_timeout, 1.5))
-            if s7_data and (s7_data.get("mlfb") or s7_data.get("model") or s7_data.get("vendor")):
-                host["vendor"] = s7_data.get("vendor", "Siemens")
-                host["fingerprint_method"] = "native_s7comm"
-                if s7_data.get("model"):
-                    host["model"] = s7_data["model"]
-                elif s7_data.get("model_family"):
-                    host["model"] = s7_data["model_family"]
-                if s7_data.get("firmware"):
-                    host["firmware"] = s7_data["firmware"]
-                if s7_data.get("mlfb"):
-                    host["mlfb"] = s7_data["mlfb"]
-                    host["evidence"].append(f"Siemens MLFB: {s7_data['mlfb']}")
-                if s7_data.get("component_name"):
-                    host["component_name"] = s7_data["component_name"]
-                    host["evidence"].append(f"Component Name: {s7_data['component_name']}")
-                if s7_data.get("keyswitch_mode"):
-                    host["keyswitch_mode"] = s7_data["keyswitch_mode"]
-                    host["evidence"].append(f"Keyswitch: {s7_data['keyswitch_mode']}")
-                if s7_data.get("protection_level"):
-                    host["protection_level"] = s7_data["protection_level"]
-                    host["evidence"].append(f"Protection: {s7_data['protection_level']}")
+        if deep_inspection:
+            try:
+                # 1. Primary: Native read-only S7comm SZL inspection (0x0011, 0x001C, 0x0132)
+                s7_data = s7.query_s7_info(ip, timeout=min(script_timeout, 1.5))
+                if s7_data and (s7_data.get("mlfb") or s7_data.get("model") or s7_data.get("vendor")):
+                    host["vendor"] = s7_data.get("vendor", "Siemens")
+                    host["fingerprint_method"] = "native_s7comm"
+                    if s7_data.get("model"):
+                        host["model"] = s7_data["model"]
+                    elif s7_data.get("model_family"):
+                        host["model"] = s7_data["model_family"]
+                    if s7_data.get("firmware"):
+                        host["firmware"] = s7_data["firmware"]
+                    if s7_data.get("mlfb"):
+                        host["mlfb"] = s7_data["mlfb"]
+                        host["evidence"].append(f"Siemens MLFB: {s7_data['mlfb']}")
+                    if s7_data.get("component_name"):
+                        host["component_name"] = s7_data["component_name"]
+                        host["evidence"].append(f"Component Name: {s7_data['component_name']}")
+                    if s7_data.get("keyswitch_mode"):
+                        host["keyswitch_mode"] = s7_data["keyswitch_mode"]
+                        host["evidence"].append(f"Keyswitch: {s7_data['keyswitch_mode']}")
+                    if s7_data.get("protection_level"):
+                        host["protection_level"] = s7_data["protection_level"]
+                        host["evidence"].append(f"Protection: {s7_data['protection_level']}")
 
-                host["evidence"].append("S7comm response confirmed (PLC/CPU)")
-                host.setdefault("probes", []).append({
-                    "probe": "native-s7-szl",
-                    "ports": "102",
-                    "command": f"native s7comm SZL inspection {ip}:102 (rack {s7_data.get('rack', 0)}, slot {s7_data.get('slot', 1)})",
-                    "status": "data",
-                    "returncode": 0,
-                    "duration_s": 0.05,
-                    "output": f"MLFB: {s7_data.get('mlfb')}, FW: {s7_data.get('firmware')}, Keyswitch: {s7_data.get('keyswitch_mode')}, Protection: {s7_data.get('protection_level')}",
-                    "error": None,
-                })
-                s7_handled = True
-        except Exception as e:
-            if verbose:
-                _log(f"[-] {ip}: S7 native inspection failed ({e}), falling back to NSE probe")
+                    host["evidence"].append("S7comm response confirmed (PLC/CPU)")
+                    host.setdefault("probes", []).append({
+                        "probe": "native-s7-szl",
+                        "ports": "102",
+                        "command": f"native s7comm SZL inspection {ip}:102 (rack {s7_data.get('rack', 0)}, slot {s7_data.get('slot', 1)})",
+                        "status": "data",
+                        "returncode": 0,
+                        "duration_s": 0.05,
+                        "output": f"MLFB: {s7_data.get('mlfb')}, FW: {s7_data.get('firmware')}, Keyswitch: {s7_data.get('keyswitch_mode')}, Protection: {s7_data.get('protection_level')}",
+                        "error": None,
+                    })
+                    s7_handled = True
+            except Exception as e:
+                if verbose:
+                    _log(f"[-] {ip}: S7 native inspection failed ({e}), falling back to NSE probe")
 
         # 2. Fallback: Nmap s7-info NSE script
         if not s7_handled:
@@ -307,47 +308,48 @@ def _fingerprint_host(host, verbose=False, script_timeout=30, pacing=None,
     #
     if "EtherNet/IP" in protocols:
         cip_handled = False
-        try:
-            # 1. Primary: Native read-only CIP ListIdentity + Backplane Chassis Scan
-            cip_data = cip.query_cip_identity(ip, timeout=min(script_timeout, 1.5))
-            if cip_data and (cip_data.get("vendor") or cip_data.get("model")):
-                host["vendor"] = cip_data.get("vendor")
-                host["fingerprint_method"] = "native_cip"
-                if cip_data.get("model"):
-                    host["model"] = cip_data["model"]
-                if cip_data.get("firmware"):
-                    host["firmware"] = cip_data["firmware"]
-                if cip_data.get("serial_number"):
-                    host["serial_number"] = cip_data["serial_number"]
-                    host["evidence"].append(f"Serial Number: {cip_data['serial_number']}")
-                if cip_data.get("device_type"):
-                    host["evidence"].append(f"Device Type: {cip_data['device_type']}")
+        if deep_inspection:
+            try:
+                # 1. Primary: Native read-only CIP ListIdentity + Backplane Chassis Scan
+                cip_data = cip.query_cip_identity(ip, timeout=min(script_timeout, 1.5))
+                if cip_data and (cip_data.get("vendor") or cip_data.get("model")):
+                    host["vendor"] = cip_data.get("vendor")
+                    host["fingerprint_method"] = "native_cip"
+                    if cip_data.get("model"):
+                        host["model"] = cip_data["model"]
+                    if cip_data.get("firmware"):
+                        host["firmware"] = cip_data["firmware"]
+                    if cip_data.get("serial_number"):
+                        host["serial_number"] = cip_data["serial_number"]
+                        host["evidence"].append(f"Serial Number: {cip_data['serial_number']}")
+                    if cip_data.get("device_type"):
+                        host["evidence"].append(f"Device Type: {cip_data['device_type']}")
 
-                # Backplane chassis scan
-                chassis = cip.scan_cip_backplane(ip, timeout=min(script_timeout, 1.5))
-                if chassis:
-                    host["chassis_modules"] = chassis
-                    for m in chassis:
-                        host["evidence"].append(
-                            f"Chassis Slot {m['slot']}: {m['model']} ({m['device_type']}) FW {m.get('firmware', 'N/A')}"
-                        )
-                        if "Programmable Logic Controller" in m.get("device_type", "") and not host.get("controller_cpu"):
-                            host["controller_cpu"] = m
+                    # Backplane chassis scan
+                    chassis = cip.scan_cip_backplane(ip, timeout=min(script_timeout, 1.5))
+                    if chassis:
+                        host["chassis_modules"] = chassis
+                        for m in chassis:
+                            host["evidence"].append(
+                                f"Chassis Slot {m['slot']}: {m['model']} ({m['device_type']}) FW {m.get('firmware', 'N/A')}"
+                            )
+                            if "Programmable Logic Controller" in m.get("device_type", "") and not host.get("controller_cpu"):
+                                host["controller_cpu"] = m
 
-                host.setdefault("probes", []).append({
-                    "probe": "native-cip-identity",
-                    "ports": "44818",
-                    "command": f"native EtherNet/IP ListIdentity + Backplane Scan {ip}:44818",
-                    "status": "data",
-                    "returncode": 0,
-                    "duration_s": 0.05,
-                    "output": f"Vendor: {host.get('vendor')}, Model: {host.get('model')}, FW: {host.get('firmware')}, Chassis Modules: {len(chassis) if chassis else 0}",
-                    "error": None,
-                })
-                cip_handled = True
-        except Exception as e:
-            if verbose:
-                _log(f"[-] {ip}: CIP native inspection failed ({e}), falling back to NSE probe")
+                    host.setdefault("probes", []).append({
+                        "probe": "native-cip-identity",
+                        "ports": "44818",
+                        "command": f"native EtherNet/IP ListIdentity + Backplane Scan {ip}:44818",
+                        "status": "data",
+                        "returncode": 0,
+                        "duration_s": 0.05,
+                        "output": f"Vendor: {host.get('vendor')}, Model: {host.get('model')}, FW: {host.get('firmware')}, Chassis Modules: {len(chassis) if chassis else 0}",
+                        "error": None,
+                    })
+                    cip_handled = True
+            except Exception as e:
+                if verbose:
+                    _log(f"[-] {ip}: CIP native inspection failed ({e}), falling back to NSE probe")
 
         # 2. Fallback: Nmap enip-info NSE script
         if not cip_handled:
@@ -405,7 +407,7 @@ def _fingerprint_host(host, verbose=False, script_timeout=30, pacing=None,
     #
     # Modbus TCP (Native Read Device Identification FC 43 / MEI 14)
     #
-    if "Modbus" in protocols:
+    if "Modbus" in protocols and deep_inspection:
         try:
             mb_data = modbus.query_modbus_device_id(ip, timeout=min(script_timeout, 1.5))
             if mb_data and (mb_data.get("vendor") or mb_data.get("product_code") or mb_data.get("model")):
@@ -525,13 +527,14 @@ def _fingerprint_host(host, verbose=False, script_timeout=30, pacing=None,
 
 
 def fingerprint(data, verbose=False, workers=DEFAULT_WORKERS, script_timeout=30,
-                pacing=None, version_intensity=None):
+                pacing=None, version_intensity=None, deep_inspection=False):
 
     if not data:
         return data
 
     total = len(data)
-    print(f"[+] Fingerprinting {total} asset(s) with {min(workers, total)} worker(s)...")
+    mode_msg = " (Deep OT Protocol Inspection enabled)" if deep_inspection else ""
+    print(f"[+] Fingerprinting {total} asset(s) with {min(workers, total)} worker(s){mode_msg}...")
 
     done = 0
 
@@ -542,7 +545,8 @@ def fingerprint(data, verbose=False, workers=DEFAULT_WORKERS, script_timeout=30,
 
         future_to_host = {
             executor.submit(_fingerprint_host, host, verbose, script_timeout,
-                            pacing=pacing, version_intensity=version_intensity): host
+                            pacing=pacing, version_intensity=version_intensity,
+                            deep_inspection=deep_inspection): host
             for host in data
         }
 

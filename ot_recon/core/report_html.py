@@ -248,6 +248,7 @@ def _section_methodology(ctx):
             ("TCP ports scanned", ctx.get("tcp_ports")),
             ("UDP scanned", f'yes ({ctx.get("udp_ports")})' if ctx.get("udp_scanned") else "no"),
             ("Live NVD lookup", "enabled" if ctx.get("cve_live") else "disabled (local database only)"),
+            ("Deep OT inspection", "enabled (CIP backplane, S7comm keyswitch/SZL, Modbus MEI)" if ctx.get("deep_inspection") else "disabled (standard fingerprinting)"),
             ("Started / finished (UTC)", f'{ctx.get("started")} / {ctx.get("finished")}'),
             ("Operator", ctx.get("operator")),
             ("OT-Recon / Nmap", f'{ctx.get("tool_version")} / {ctx.get("nmap_version") or "unknown"}'),

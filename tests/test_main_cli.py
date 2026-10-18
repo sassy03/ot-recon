@@ -697,3 +697,18 @@ def test_custom_report_name_flag_and_non_overwriting(tmp_path):
     assert out_path2 == tmp_path / "custom_site_1.html"
 
 
+def test_deep_inspection_cli_flag_reaches_fingerprinter(tmp_path):
+    # Without --deep: deep_inspection should be False by default
+    mocks = _run_main(["scan", "10.0.0.0/24"], tmp_path)
+    assert mocks["fp"].call_args.kwargs["deep_inspection"] is False
+
+    # With --deep: deep_inspection should be True
+    mocks_deep = _run_main(["scan", "10.0.0.0/24", "--deep"], tmp_path)
+    assert mocks_deep["fp"].call_args.kwargs["deep_inspection"] is True
+
+    # With --deep-inspection: deep_inspection should be True
+    mocks_deep_long = _run_main(["scan", "10.0.0.0/24", "--deep-inspection"], tmp_path)
+    assert mocks_deep_long["fp"].call_args.kwargs["deep_inspection"] is True
+
+
+

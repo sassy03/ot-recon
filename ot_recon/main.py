@@ -130,6 +130,13 @@ def build_parser():
              "scanning host is auto-detected and excluded, since it usually isn't the "
              "OT asset you're trying to survey."
     )
+    scan_p.add_argument(
+        "--deep", "--deep-inspection", action="store_true", default=None,
+        dest="deep_inspection",
+        help="Enable deep active OT protocol inspection (CIP Backplane Chassis enumeration, "
+             "Siemens S7comm keyswitch & SZL security levels, Modbus TCP MEI device identification). "
+             "Default: from config (false by default for standard/gentle operation)."
+    )
 
     # --- diff ---
     diff_p = subparsers.add_parser("diff", help="Compare two saved scan snapshots")
@@ -299,6 +306,8 @@ def run_scan(args):
     tcp_pacing = profiles.pacing_args(settings, "tcp")
     udp_pacing = profiles.pacing_args(settings, "udp")
 
+    deep_mode = bool(args.deep_inspection) if getattr(args, "deep_inspection", None) is not None else bool(config.get("scan", {}).get("deep_inspection", False))
+
     # --- dry run: show the plan, touch nothing ---
     if args.dry_run:
         from ot_recon.core.netutils import get_local_ips
@@ -307,6 +316,7 @@ def run_scan(args):
             args.target, settings, config, exclude, args.udp, local_ips,
             cve_config.get("live_lookup"),
             config["scan"]["tcp_ports"], config["scan"]["udp_ports"],
+            deep_inspection=deep_mode,
         )
         print(plan.format_plan(steps, settings, scope_info, exclude, local_ips))
         return
@@ -320,11 +330,14 @@ def run_scan(args):
             target=args.target, profile=settings["name"], settings=settings,
             scope=scope_info, excluded=exclude, argv=sys.argv[1:],
             udp=bool(args.udp), cve_live=bool(cve_config.get("live_lookup")),
+            deep_inspection=deep_mode,
         )
 
         for note in scope_info["overridden"]:
             print(f"[!] Guardrail overridden with --force: {note}")
         print(f"[+] Scan profile: {settings['name']} - {settings.get('description', '')}")
+        if deep_mode:
+            print("[+] Deep OT Protocol Inspection enabled (CIP Backplane, S7comm SZL, Modbus MEI)")
 
         # Start from a clean slate so this run can only ever see its own output.
         clear_artifacts()
@@ -352,6 +365,7 @@ def run_scan(args):
             data, args.verbose, workers=settings["workers"],
             script_timeout=settings["nmap_script_timeout"],
             pacing=tcp_pacing, version_intensity=settings.get("version_intensity"),
+            deep_inspection=deep_mode,
         )
         data = classify(data)
         data = assess_risk(data, cve_config=cve_config, verbose=args.verbose)
@@ -363,6 +377,7 @@ def run_scan(args):
             "target": args.target,
             "started": started,
             "finished": _local_iso(),
+            "deep_inspection": deep_mode,
             "profile": {
                 "name": settings["name"],
                 "description": settings.get("description", ""),

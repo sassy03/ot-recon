@@ -8,7 +8,7 @@
 from ot_recon.core import fingerprinter, profiles, scanner
 
 
-def build_plan(target, settings, config, exclude, udp, local_ips, cve_live, tcp_ports=None, udp_ports=None):
+def build_plan(target, settings, config, exclude, udp, local_ips, cve_live, tcp_ports=None, udp_ports=None, deep_inspection=False):
     """Return an ordered list of {"step", "when", "command"} dicts.
     `command` is a list (an nmap invocation) or None for non-nmap actions."""
 
@@ -33,6 +33,23 @@ def build_plan(target, settings, config, exclude, udp, local_ips, cve_live, tcp_
             "when": "against each live host (needs root)",
             "command": scanner.build_udp_scan_cmd(
                 ["<live hosts>"], udp_ports or config["scan"]["udp_ports"], pacing=udp_pacing),
+        })
+
+    if deep_inspection:
+        steps.append({
+            "step": "Native OT Protocol: Siemens S7comm SZL inspection (0x0011, 0x001C, 0x0132)",
+            "when": "against live hosts with TCP 102 open (reads keyswitch mode & protection level)",
+            "command": None,
+        })
+        steps.append({
+            "step": "Native OT Protocol: Rockwell EtherNet/IP CIP Backplane Chassis Scan (Slots 0..16)",
+            "when": "against live hosts with TCP 44818 open (enumerates rack modules behind adapters)",
+            "command": None,
+        })
+        steps.append({
+            "step": "Native OT Protocol: Modbus TCP MEI Read Device Identification (FC 43/14)",
+            "when": "against live hosts with TCP 502 open",
+            "command": None,
         })
 
     for name, spec in fingerprinter.PROBES.items():

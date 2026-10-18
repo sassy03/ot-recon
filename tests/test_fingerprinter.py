@@ -364,7 +364,7 @@ def test_fingerprint_native_s7_success():
         "slot": 1,
     }
     with patch("ot_recon.core.protocols.s7.query_s7_info", return_value=fake_s7):
-        res = fingerprinter._fingerprint_host(host)
+        res = fingerprinter._fingerprint_host(host, deep_inspection=True)
 
     assert res["vendor"] == "Siemens"
     assert res["fingerprint_method"] == "native_s7comm"
@@ -390,7 +390,7 @@ def test_fingerprint_native_cip_with_backplane():
     ]
     with patch("ot_recon.core.protocols.cip.query_cip_identity", return_value=fake_cip):
         with patch("ot_recon.core.protocols.cip.scan_cip_backplane", return_value=fake_chassis):
-            res = fingerprinter._fingerprint_host(host)
+            res = fingerprinter._fingerprint_host(host, deep_inspection=True)
 
     assert res["vendor"] == "Rockwell Automation/Allen-Bradley"
     assert res["fingerprint_method"] == "native_cip"
@@ -409,7 +409,7 @@ def test_fingerprint_native_modbus_mei():
         "firmware": "02.30",
     }
     with patch("ot_recon.core.protocols.modbus.query_modbus_device_id", return_value=fake_mb):
-        res = fingerprinter._fingerprint_host(host)
+        res = fingerprinter._fingerprint_host(host, deep_inspection=True)
 
     assert res["vendor"] == "Schneider Electric"
     assert res["fingerprint_method"] == "native_modbus"
@@ -417,4 +417,15 @@ def test_fingerprint_native_modbus_mei():
     assert res["firmware"] == "02.30"
     assert any("Modbus Vendor: Schneider Electric" in e for e in res["evidence"])
     assert any(p["probe"] == "native-modbus-mei" for p in res["probes"])
+
+
+def test_fingerprint_deep_inspection_disabled_by_default():
+    host = _host([(102, "S7"), (44818, "EtherNet/IP")])
+    with patch("ot_recon.core.protocols.s7.query_s7_info") as mock_s7, \
+         patch("ot_recon.core.protocols.cip.query_cip_identity") as mock_cip:
+        fingerprinter._fingerprint_host(host, deep_inspection=False)
+
+    # Native deep queries must NOT be called when deep_inspection is False
+    mock_s7.assert_not_called()
+    mock_cip.assert_not_called()
 
