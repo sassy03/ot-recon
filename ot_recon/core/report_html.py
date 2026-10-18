@@ -133,6 +133,7 @@ table.tiles td{background:#f3f6f9;border:1px solid #dde3ea;text-align:center;pad
 .cov-na{background:#b0bec5;color:#263238}
 .det{background:#fff;color:#37474f;border:1px solid #90a4ae}
 .posture{padding:12px 16px;margin:10px 0;font-size:16px;font-weight:700;border-radius:3px}
+.security-posture{background:#f3f6f9;border-left:4px solid #1f3a4d;padding:8px 12px;margin:10px 0;font-size:13px;border-radius:2px}
 .callout{border-left:4px solid #f9a825;background:#fff8e1;padding:10px 14px;margin:14px 0}
 .note{border-left:4px solid #90a4ae;background:#f3f6f9;padding:8px 14px;margin:10px 0;font-size:13px}
 .host{border:1px solid #cfd8e3;margin:20px 0;border-radius:3px}
@@ -259,8 +260,8 @@ def _section_methodology(ctx):
     out.append(
         '<h3>What was done</h3><ul>'
         '<li>Host discovery (ping sweep) and a TCP connect scan of OT and IT service ports.</li>'
-        '<li>Read-only, vendor-specific identification probes (Siemens S7, Rockwell EtherNet/IP, B&amp;R web '
-        'endpoints) to establish vendor, model and firmware.</li>'
+        '<li>Native read-only deep protocol inspection (Siemens S7comm SZL CPU state &amp; protection, Rockwell '
+        'EtherNet/IP CIP backplane chassis enumeration, Modbus TCP MEI device identification) and safe vendor-specific probes.</li>'
         '<li>Evidence-based device classification and rule-based exposure assessment.</li>'
         '<li>Correlation of identified products and firmware against known vulnerabilities (curated local '
         'database, plus NVD when enabled).</li></ul>'
@@ -407,6 +408,41 @@ def _render_host(h):
 
     if h.get("summary"):
         out.append(f'<p class="muted">{_e(h["summary"])}</p>')
+
+    # Deep Inspection & Security Posture (Native S7/CIP SZL Inspection)
+    if h.get("keyswitch_mode") or h.get("protection_level") or h.get("mlfb") or h.get("component_name"):
+        sp = ['<div class="security-posture"><b>Deep Protocol Inspection &amp; Security Posture:</b><br>']
+        if h.get("keyswitch_mode"):
+            kw = h["keyswitch_mode"]
+            kw_badge = "sev-critical" if "REMOTE" in kw else ("sev-low" if kw == "RUN" else "sev-medium")
+            sp.append(f'Keyswitch Mode: {_badge(kw, kw_badge)} ')
+        if h.get("protection_level"):
+            prot = h["protection_level"]
+            prot_badge = "sev-critical" if "Level 1" in prot else ("sev-medium" if "Level 2" in prot else "sev-low")
+            sp.append(f'&middot; Protection: {_badge(prot, prot_badge)} ')
+        if h.get("component_name"):
+            sp.append(f'&middot; System / Project: <b>{_e(h["component_name"])}</b> ')
+        if h.get("mlfb"):
+            sp.append(f'&middot; MLFB: <code>{_e(h["mlfb"])}</code> ')
+        sp.append('</div>')
+        out.append("".join(sp))
+
+    # Chassis / Backplane Rack Layout (Native CIP Backplane Scanning)
+    if h.get("chassis_modules"):
+        chassis = h["chassis_modules"]
+        out.append('<h3>Chassis / Backplane Rack Layout</h3>')
+        out.append('<table class="data"><tr><th>Slot</th><th>Module Model</th><th>Device Type</th><th>Firmware</th></tr>')
+        for m in chassis:
+            is_cpu = "Programmable Logic Controller" in m.get("device_type", "")
+            row_style = ' style="background:#f0f7fc;font-weight:600"' if is_cpu else ''
+            cpu_badge = ' <span class="badge sev-low">CPU</span>' if is_cpu else ''
+            out.append(
+                f'<tr{row_style}><td>Slot {m.get("slot", 0)}</td>'
+                f'<td>{_e(m.get("model", "-"))}{cpu_badge}</td>'
+                f'<td>{_e(m.get("device_type", "-"))}</td>'
+                f'<td>{_e(m.get("firmware", "-"))}</td></tr>'
+            )
+        out.append('</table>')
 
     services = h.get("services") or h.get("ot_ports") or []
     if services:

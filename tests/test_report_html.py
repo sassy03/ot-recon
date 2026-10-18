@@ -299,3 +299,30 @@ def test_generated_timestamp_includes_local_timezone():
     out = render_html([_host()], scan_ctx=_ctx())
     assert f"({tz_name})" in out
 
+
+def test_html_renders_security_posture_and_chassis_modules():
+    host = _host(
+        ip="10.0.0.10",
+        keyswitch_mode="REMOTE RUN (Logic download allowed across network)",
+        protection_level="Level 1 (No Protection / Open)",
+        mlfb="6ES7 511-1AK02-0AB0",
+        component_name="Plant_Line_1",
+        chassis_modules=[
+            {"slot": 0, "model": "1756-L72", "device_type": "Programmable Logic Controller", "firmware": "32.11"},
+            {"slot": 1, "model": "1756-EN2T", "device_type": "Communications Adapter", "firmware": "5.08"},
+        ],
+    )
+    out = render_html([host], scan_ctx=_ctx())
+    assert "Deep Protocol Inspection &amp; Security Posture" in out
+    assert "Keyswitch Mode:" in out
+    assert "REMOTE RUN" in out
+    assert "Level 1 (No Protection / Open)" in out
+    assert "Plant_Line_1" in out
+    assert "6ES7 511-1AK02-0AB0" in out
+    assert "Chassis / Backplane Rack Layout" in out
+    assert "1756-L72" in out
+    assert "1756-EN2T" in out
+    assert "Slot 0" in out
+    assert "Slot 1" in out
+
+

@@ -244,3 +244,37 @@ def test_print_coverage_summary_tolerates_missing_coverage(capsys):
     from ot_recon.core.reporter import print_coverage_summary
     print_coverage_summary([{}], {})               # old snapshot / no context - must not raise
     assert "Assessment Coverage" in capsys.readouterr().out
+
+
+def test_console_report_renders_security_posture_and_chassis(capsys):
+    from ot_recon.core.reporter import generate_report
+    host = {
+        "ip": "10.0.0.10",
+        "type": "Field Device",
+        "vendor": "Rockwell Automation/Allen-Bradley",
+        "model": "1756-EN2T",
+        "firmware": "5.08",
+        "confidence": "Very High",
+        "ot_ports": [{"protocol": "EtherNet/IP", "state": "open"}],
+        "services": [],
+        "risk_score": 25,
+        "risk_severity": "Low",
+        "keyswitch_mode": "REMOTE RUN",
+        "protection_level": "Level 1 (No Protection / Open)",
+        "risks": [{"finding": "Open CIP port", "severity": "Low", "remediation_priority": "P3"}],
+        "chassis_modules": [
+            {"slot": 0, "model": "1756-L72", "device_type": "Programmable Logic Controller", "firmware": "32.11"},
+            {"slot": 1, "model": "1756-EN2T", "device_type": "Communications Adapter", "firmware": "5.08"},
+        ],
+    }
+    generate_report([host])
+    out = capsys.readouterr().out
+    assert "Security Posture:" in out
+    assert "REMOTE RUN" in out
+    assert "Level 1" in out
+    assert "CIP Backplane Chassis Layouts" in out
+    assert "1756-L72" in out
+    assert "[CPU]" in out
+    assert "Slot 0" in out
+    assert "Slot 1" in out
+

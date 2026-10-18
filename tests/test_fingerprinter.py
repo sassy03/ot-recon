@@ -1,7 +1,16 @@
+import pytest
 import time
 from unittest.mock import patch, MagicMock
 
 from ot_recon.core import fingerprinter
+
+
+@pytest.fixture(autouse=True)
+def _mock_no_network(monkeypatch):
+    """By default, simulate no socket connection to avoid 10.0.0.1 TCP timeouts during unit tests."""
+    def fake_connect(*args, **kwargs):
+        raise OSError("Unit test: no live network")
+    monkeypatch.setattr("socket.create_connection", fake_connect)
 
 
 def _run_result(stdout=""):
@@ -338,3 +347,74 @@ def test_probes_go_through_the_audited_runner():
         fingerprinter._fingerprint_host(host)
 
     assert mock_run.call_args.kwargs["purpose"] == "fingerprint:s7-info"
+
+
+def test_fingerprint_native_s7_success():
+    host = _host([(102, "S7")])
+    fake_s7 = {
+        "vendor": "Siemens",
+        "model": "6ES7 511-1AK02-0AB0",
+        "model_family": "S7-1500",
+        "firmware": "V2.9.3",
+        "mlfb": "6ES7 511-1AK02-0AB0",
+        "component_name": "Line1_PLC",
+        "keyswitch_mode": "REMOTE RUN (Logic download allowed across network)",
+        "protection_level": "Level 1 (No Protection / Open)",
+        "rack": 0,
+        "slot": 1,
+    }
+    with patch("ot_recon.core.protocols.s7.query_s7_info", return_value=fake_s7):
+        res = fingerprinter._fingerprint_host(host)
+
+    assert res["vendor"] == "Siemens"
+    assert res["fingerprint_method"] == "native_s7comm"
+    assert res["mlfb"] == "6ES7 511-1AK02-0AB0"
+    assert res["keyswitch_mode"] == "REMOTE RUN (Logic download allowed across network)"
+    assert res["protection_level"] == "Level 1 (No Protection / Open)"
+    assert any("Siemens MLFB: 6ES7 511-1AK02-0AB0" in e for e in res["evidence"])
+    assert any(p["probe"] == "native-s7-szl" for p in res["probes"])
+
+
+def test_fingerprint_native_cip_with_backplane():
+    host = _host([(44818, "EtherNet/IP")])
+    fake_cip = {
+        "vendor": "Rockwell Automation/Allen-Bradley",
+        "model": "1756-EN2T",
+        "firmware": "5.08",
+        "device_type": "Communications Adapter",
+        "serial_number": "AABBCCDD",
+    }
+    fake_chassis = [
+        {"slot": 0, "model": "1756-L72", "device_type": "Programmable Logic Controller", "firmware": "32.11"},
+        {"slot": 1, "model": "1756-EN2T", "device_type": "Communications Adapter", "firmware": "5.08"},
+    ]
+    with patch("ot_recon.core.protocols.cip.query_cip_identity", return_value=fake_cip):
+        with patch("ot_recon.core.protocols.cip.scan_cip_backplane", return_value=fake_chassis):
+            res = fingerprinter._fingerprint_host(host)
+
+    assert res["vendor"] == "Rockwell Automation/Allen-Bradley"
+    assert res["fingerprint_method"] == "native_cip"
+    assert res["model"] == "1756-EN2T"
+    assert len(res["chassis_modules"]) == 2
+    assert res["controller_cpu"]["model"] == "1756-L72"
+    assert any("Chassis Slot 0: 1756-L72" in e for e in res["evidence"])
+    assert any(p["probe"] == "native-cip-identity" for p in res["probes"])
+
+
+def test_fingerprint_native_modbus_mei():
+    host = _host([(502, "Modbus")])
+    fake_mb = {
+        "vendor": "Schneider Electric",
+        "product_code": "BMX P34 2020",
+        "firmware": "02.30",
+    }
+    with patch("ot_recon.core.protocols.modbus.query_modbus_device_id", return_value=fake_mb):
+        res = fingerprinter._fingerprint_host(host)
+
+    assert res["vendor"] == "Schneider Electric"
+    assert res["fingerprint_method"] == "native_modbus"
+    assert res["model"] == "BMX P34 2020"
+    assert res["firmware"] == "02.30"
+    assert any("Modbus Vendor: Schneider Electric" in e for e in res["evidence"])
+    assert any(p["probe"] == "native-modbus-mei" for p in res["probes"])
+

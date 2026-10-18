@@ -113,6 +113,11 @@ def generate_report(data):
             if host.get("summary"):
                 console.print(f"  [italic dim]{_e(str(host['summary']))}[/italic dim]")
 
+            if host.get("keyswitch_mode") or host.get("protection_level"):
+                ks = host.get("keyswitch_mode") or "-"
+                prot = host.get("protection_level") or "-"
+                console.print(f"  [bold]Security Posture:[/bold] Keyswitch: [yellow]{_e(ks)}[/yellow] | Protection: [cyan]{_e(prot)}[/cyan]")
+
             for r in sorted(
                 host["risks"],
                 key=lambda f: list(SEVERITY_STYLE.keys()).index(f["severity"])
@@ -140,6 +145,15 @@ def generate_report(data):
                     line += "[/dim]"
 
                 console.print(line)
+
+    hosts_with_chassis = [h for h in sorted_data if h.get("chassis_modules")]
+    if hosts_with_chassis:
+        console.print("\n[bold]CIP Backplane Chassis Layouts[/bold]")
+        for host in hosts_with_chassis:
+            console.print(f"\n[bold]{_e(str(host['ip']))}[/bold] — {_e(str(host.get('model', 'Chassis Adapter')))} ({len(host['chassis_modules'])} module(s))")
+            for m in host["chassis_modules"]:
+                cpu_tag = " [bold green][CPU][/bold green]" if "Programmable Logic Controller" in m.get("device_type", "") else ""
+                console.print(f"  Slot {m.get('slot', 0)}: {_e(m.get('model', '-'))}{cpu_tag} | {_e(m.get('device_type', '-'))} | FW {_e(m.get('firmware', '-'))}")
 
     console.print("\n[bold]Scan Summary[/bold]")
 
