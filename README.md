@@ -1,95 +1,118 @@
-# OT Recon Tool
+# OT-Recon: Industrial Cybersecurity Reconnaissance & Vulnerability Assessment
 
-A safety-first OT (Operational Technology) network reconnaissance and vulnerability
-assessment tool for Siemens, Rockwell/Allen-Bradley and B&R Automation environments.
-Nmap does the scanning; OT-Recon adds OT-aware identification, evidence-based
-classification, risk scoring, CVE correlation, and an honest report of what it could
-**not** assess.
+[![Python Version](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/)
+[![License](https://img.shields.io/badge/license-Proprietary-red.svg)]()
+[![Standard](https://img.shields.io/badge/standard-IEC%2062443-green.svg)](https://www.isa.org/standards-and-publications/isa-standards/isa-iec-62443-series)
+[![Architecture](https://img.shields.io/badge/architecture-Purdue%20ISA--95-orange.svg)]()
 
-## Features
+**OT-Recon** is a deterministic, safety-first Operational Technology (OT), Industrial Control Systems (ICS), and SCADA reconnaissance and vulnerability assessment platform. It provides deep protocol inspection for **Siemens S7**, **Rockwell Automation / Allen-Bradley EtherNet/IP**, and **Schneider Electric Modbus TCP** without the catastrophic hazards of offensive exploit suites or aggressive IT port scanners.
 
-* Network discovery and OT service enumeration (Nmap-based)
-* Read-only vendor fingerprinting (Siemens S7, Rockwell EtherNet/IP, B&R web endpoints)
-* Evidence-based device classification (PLC, Safety PLC, HMI, ...)
-* Risk scoring with CVE correlation (local database; optional live NVD lookup)
-* Detailed self-contained HTML assessment report, with raw probe evidence and a coverage section
-* History snapshots and scan-to-scan diffs
-* CLI and optional GUI
+For detailed operational specifications, protocol packet flows, and architectural deep-dives, see the [Full Technical Documentation & Operations Manual](docs/DOCUMENTATION.md).
 
-## Usage
+---
 
-```bash
-ot-recon scan 192.168.1.0/24                    # gentle "safe" profile by default
-ot-recon scan 192.168.1.0/24 --dry-run          # show exactly what would run; sends nothing
-ot-recon scan 192.168.1.0/24 --format html      # also write output/report.html
-ot-recon report                                 # re-render the latest scan as HTML (no rescan)
-ot-recon history | diff | report                # snapshots, comparisons, reports
-```
+## Key Capabilities
 
-## Safety guardrails
+* **Native Read-Only Deep Protocol Inspection (`--deep`)**:
+  * **Siemens S7comm (Port 102)**: Direct ISO-on-TCP COTP handshake, SZL `0x0011` module identification (MLFB part numbers, firmware versions), SZL `0x001C` component name, and SZL `0x0132` CPU keyswitch state (`RUN` vs `REMOTE RUN`) and protection levels (Level 1 Open vs Level 2/3 Password).
+  * **Rockwell EtherNet/IP & CIP (Port 44818 / 2222)**: CIP `ListIdentity` discovery and full **Chassis Backplane Walking** (Slot 0-16 enumeration of Controllers, Safety Partners, Communication Bridges, and I/O modules).
+  * **Modbus TCP (Port 502)**: Modbus Encapsulated Interface (MEI) Function Code 43 / Sub-function 14 reading VendorName, ProductCode, MajorMinorRevision, and UserApplicationName.
+* **Purdue Model (ISA-95) Hierarchy Mapping**:
+  * Automatically classifies discovered industrial nodes into **L1 Safety (SIS)**, **L1 Basic Process Control**, **L2 Supervisory / HMI**, **L3 Operations / SCADA**, or **Unclassified / IT Hosts**.
+* **IEC 62443 Security Compliance Matrix**:
+  * Evaluates discovered exposures against **IEC 62443-3-3** and **IEC 62443-4-2** Foundational Requirements:
+    * **FR 1 (IAC)**: Unauthenticated industrial protocols.
+    * **FR 2 (UC)**: Keyswitch in `REMOTE RUN` or controller `Protection Level 1`.
+    * **FR 3 (SI)**: Correlated Critical/High firmware CVEs.
+    * **FR 4 (DC)**: Unencrypted HTTP/Telnet/FTP management services.
+    * **FR 5 (RDF)**: Multi-protocol bridging and conduit separation risks.
+* **Visual Modular Chassis Rack Enclosure**:
+  * Renders physical modular backplanes (e.g. Rockwell ControlLogix 1756) directly in reports with color-coded slots (CPU, COMM, I/O) and active status LEDs.
+* **High-Impact Operational Risk Alerts**:
+  * Dedicated alert callouts flagging critical OT conditions: physical keyswitch set to `REMOTE RUN` (over-the-wire logic overwrite exposure) and `Protection Level 1` (unrestricted memory access).
+* **Multi-Layer Safety Guardrails**:
+  * Strict CIDR scope whitelisting, non-routable private space validation, automated scanner exclusion, polite timing profiles (`T2`, 200ms delay), and fail-closed JSONL audit logging (`output/audit/`).
+* **Air-Gap Ready, Zero-Script HTML Reports**:
+  * Self-contained HTML reports adhering strictly to `Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline'`. Safe to open on air-gapped engineering workstations or email directly to stakeholders.
 
-OT devices can be fragile, so the tool is gentle by default and refuses risky scans.
+---
 
-| Feature | What it does |
-|---|---|
-| **Scan profiles** `--profile safe\|standard\|fast` | `safe` (default): polite timing (T2), 200 ms between probes, 1 retry, minimal service-detection probing, 2 workers. `fast` is the original aggressive T5 behaviour - lab/IT networks only. Tunable under `profiles:` in config. |
-| **Scope policy** `scope.allowed` | Allowlist of networks. A target outside it is **always refused** - `--force` cannot override it. |
-| **Sanity checks** | Refuses non-private target space, targets over `scope.max_addresses` (default 1024), unverifiable hostnames, and option-like targets (`-sS`). `--force` overrides these (and the override is recorded). |
-| **Typo guard** `--scope CIDR` | Refuse unless the target is inside these networks for this run. |
-| **Do-not-scan list** `--exclude` / `scope.exclude` | Addresses never touched (fragile or safety-critical devices). This machine is excluded automatically (`--include-self` to include it). |
-| **`--dry-run`** | Prints every command that would run. No packets sent, no files written. |
-| **Audit log** | Every command (exact arguments, timing, outcome), plus refused scans, is written to `output/audit/scan_<timestamp>.jsonl`. If the log can't be written the scan is refused rather than run unaudited. |
-| **Clean slate** | Previous scan output is deleted before each run, and only hosts discovered *this run* are ever probed. |
+## Quick Start
 
-Fingerprint probes also skip redundant host discovery (`-Pn`) since discovery already
-proved the host is alive.
-
-## The assessment report
-
-`--format html` (or `ot-recon report`) writes one self-contained HTML file - no scripts, no
-external assets - safe to email or open air-gapped:
-
-1. Executive summary  2. Scope & methodology (profile, scope, versions, audit log)
-3. Asset inventory  4. Remediation plan (grouped, prioritised)  5. **Coverage & limitations**
-6. Detailed findings per host, with raw probe evidence  7. Changes since the previous scan
-
-Every finding states **how it was established**: `observed`, `product_matched`,
-`version_matched`, `inconclusive` (firmware unreadable - verify manually) or
-`external_unverified` (live NVD match). The coverage section lists what could *not* be
-assessed (UDP not scanned, protocols with no probe, unreadable firmware, failed probes) so
-"no findings" is never mistaken for "safe". Anything a device sends back is HTML-escaped.
-
-## Optional: live CVE lookup
+### Installation
 
 ```bash
-pip install -e ".[cve-live]"
-export NVD_API_KEY=your-key-here      # optional; raises the NVD rate limit
-ot-recon scan 192.168.1.0/24 --cve-live
+# Clone the repository and install dependencies
+git clone https://github.com/your-org/ot-recon.git
+cd ot-recon
+pip install -e .
+
+# Optional: Install GUI and live NVD API support
+pip install -e ".[gui,cve-live]"
 ```
 
-The local curated database (`data/cve_db.yaml`) always runs and is the offline fallback.
-Live results are cached in `output/cve_cache.json` (7-day TTL).
-
-## Optional: GUI
+### Basic Commands
 
 ```bash
-sudo apt install python3-wxgtk4.0     # Debian/Ubuntu: don't let pip build wxPython
-pip install -e ".[gui]"
-ot-recon-gui
+# Standard polite scan of a plant subnet (safe profile by default)
+python -m ot_recon.main scan 192.168.1.0/24
+
+# Full-capability deep scan: native CIP backplane, S7comm SZL, and HTML report export
+python -m ot_recon.main scan 192.168.1.0/24 --deep --format html
+
+# Dry-run execution: previews all planned probes without sending any network packets
+python -m ot_recon.main scan 192.168.1.0/24 --dry-run
+
+# Re-render the latest scan snapshot into an updated HTML report (no rescan required)
+python -m ot_recon.main report
+
+# Inspect scan history and compute deltas between scans
+python -m ot_recon.main history
+python -m ot_recon.main diff snapshot_1.json snapshot_2.json
+
+# Launch the desktop graphical interface
+python -m ot_recon.main gui
 ```
 
-## Requirements
+---
 
-* Python 3.x
-* Nmap (UDP scanning needs root)
+## Demonstration Report
 
-## Tests
+Want to explore an audit-grade report with full capabilities (Purdue hierarchy, visual chassis rack, operational alerts, and IEC 62443 matrix) without needing a live PLC rack?
 
-```bash
-pip install -e ".[dev]"
-pytest
+Run the included demonstration generator:
+```powershell
+python scripts/generate_demo_report.py
+```
+Open the generated report in any browser:
+```powershell
+Start-Process "output\demonstration_ot_recon_report.html"
 ```
 
-## Author
+---
 
-Abhinav
+## Safety Guardrails Summary
+
+| Guardrail | Enforcement | Purpose | Override |
+| :--- | :--- | :--- | :--- |
+| **Allowed Scope** | `scope.allowed` | Verifies target subnet is inside client allowlist. | **Cannot be overridden.** |
+| **Sanity Guard** | `guardrails.py` | Forbids public IPs, subnets > 1024 IPs, and argument injection. | Overridable via `--force`. |
+| **Exclude List** | `--exclude` | Hard exclusion for sensitive SIS controllers / governors. | Scanner auto-excluded. |
+| **Safe Profile** | `--profile safe` | Restricts timing to `T2`, 200ms delay, 1 retry, 2 concurrent workers. | Selectable profiles. |
+| **Audit Log** | `output/audit/` | Records every command, argument, probe timestamp, and target IP. | Fail-closed policy. |
+
+---
+
+## Documentation Index
+
+* 📖 **[Full Operations & Technical Documentation](docs/DOCUMENTATION.md)**: Exhaustive manual detailing protocol packet structures, scoring algorithms, configuration parameters, and compliance references.
+* 📋 **[Configuration Reference](docs/DOCUMENTATION.md#12-configuration-reference-configyaml)**: Reference for `config.yaml` options, port lists, and safety settings.
+* 🖥️ **[GUI User Manual](docs/DOCUMENTATION.md#11-desktop-gui-guide)**: Graphical user interface walkthrough.
+* ❓ **[Troubleshooting & FAQ](docs/DOCUMENTATION.md#14-troubleshooting--operational-faq)**: Frequently asked operational questions.
+
+---
+
+## License & Support
+
+Maintained for industrial asset owners, plant operations, and OT cybersecurity teams.  
+Author: Abhinav
