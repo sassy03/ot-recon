@@ -1,9 +1,0 @@
-__pycache__/
-*.pyc
-output/
-*.xml
-*.json
-.env
-*.egg-info/
-build/
-dist/
