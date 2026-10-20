@@ -134,7 +134,7 @@ def _compute_iec62443_matrix(data):
             "id": "FR 2",
             "name": "Use Control & Mode Authorization (UC)",
             "standard": "IEC 62443-3-3 SR 2.1 / 2.3",
-            "condition": lambda h: "REMOTE" in str(h.get("keyswitch_mode") or "").upper() or "LEVEL 1" in str(h.get("protection_level") or "").upper(),
+            "condition": lambda h: "REMOTE" in str(h.get("keyswitch_mode") or "").upper() or "LEVEL 1" in str(h.get("protection_level") or "").upper() or str(h.get("protection_level")) == "1",
             "risk": "Controllers operating in REMOTE mode or Protection Level 1 allow over-the-network ladder logic overwrites, diagnostic force-coils, and CPU halt commands.",
             "recommendation": "Enforce physical keyswitch position in RUN (Hard Lock) during active plant production. Configure memory block and DB read/write protection passwords."
         },
@@ -745,9 +745,9 @@ def _render_host(h):
                 '</div>'
             )
 
-    if h.get("protection_level"):
+    if h.get("protection_level") is not None:
         prot = str(h["protection_level"])
-        if "Level 1" in prot or "Open" in prot or "No Protection" in prot:
+        if "Level 1" in prot or "Open" in prot or "No Protection" in prot or prot == "1":
             alerts.append(
                 '<div class="op-alert op-alert-warning">'
                 '<div class="op-alert-title">⚠️ Access Control Warning: Controller Protection Level 1 (Open / Unrestricted)</div>'
@@ -759,15 +759,15 @@ def _render_host(h):
         out.append("".join(alerts))
 
     # Deep Inspection & Security Posture Card (Native S7/CIP SZL Inspection)
-    if h.get("keyswitch_mode") or h.get("protection_level") or h.get("mlfb") or h.get("component_name"):
+    if h.get("keyswitch_mode") or h.get("protection_level") is not None or h.get("mlfb") or h.get("component_name"):
         sp = ['<div class="security-posture"><b>Deep Protocol Inspection &amp; Security Posture:</b><br>']
         if h.get("keyswitch_mode"):
-            kw = h["keyswitch_mode"]
+            kw = str(h["keyswitch_mode"])
             kw_badge = "sev-critical" if "REMOTE" in kw else ("sev-low" if kw == "RUN" else "sev-medium")
             sp.append(f'Keyswitch Mode: {_badge(kw, kw_badge)} ')
-        if h.get("protection_level"):
-            prot = h["protection_level"]
-            prot_badge = "sev-critical" if "Level 1" in prot else ("sev-medium" if "Level 2" in prot else "sev-low")
+        if h.get("protection_level") is not None:
+            prot = str(h["protection_level"])
+            prot_badge = "sev-critical" if ("Level 1" in prot or prot == "1") else ("sev-medium" if ("Level 2" in prot or prot == "2") else "sev-low")
             sp.append(f'&middot; Protection: {_badge(prot, prot_badge)} ')
         if h.get("component_name"):
             sp.append(f'&middot; System / Project: <b>{_e(h["component_name"])}</b> ')
