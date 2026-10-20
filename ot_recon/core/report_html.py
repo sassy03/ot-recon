@@ -102,54 +102,214 @@ def _top_finding(host):
                if f.get("severity") in SEVERITY_ORDER else 99)
 
 
+def _purdue_level(device_type):
+    """Map classified device type to Purdue Model (ISA-95) operational hierarchy."""
+    dt = str(device_type or "").lower()
+    if "safety" in dt or "guardlogix" in dt or "safedesigner" in dt:
+        return "L1: Safety / SIS", "purdue-l1-safety"
+    if "plc" in dt or "programmable logic" in dt or "controller" in dt:
+        return "L1: Basic Control (PLC)", "purdue-l1"
+    if "adapter" in dt or "discrete" in dt or "drive" in dt or "field" in dt:
+        return "L1: Field Device / I/O", "purdue-l1"
+    if "hmi" in dt or "panelview" in dt or "simatic hmi" in dt or "screen" in dt or "human-machine" in dt:
+        return "L2: Supervisory (HMI)", "purdue-l2"
+    if "server" in dt or "scada" in dt or "historian" in dt or "workstation" in dt or "industrial server" in dt:
+        return "L3: Operations Infrastructure", "purdue-l3"
+    return "Unclassified / IT Host", "purdue-na"
+
+
+def _compute_iec62443_matrix(data):
+    """Map detected assets and exposures against IEC 62443 Foundational Requirements."""
+    reqs = [
+        {
+            "id": "FR 1",
+            "name": "Identification & Authentication Control (IAC)",
+            "standard": "IEC 62443-3-3 SR 1.1 / 1.2",
+            "condition": lambda h: any(p.get("protocol") in ("Modbus", "S7", "EtherNet/IP", "HTTP", "Telnet", "FTP")
+                                       for p in h.get("ot_ports", []) if p.get("state", "open") == "open"),
+            "risk": "Industrial control protocols operate in cleartext without cryptographic identification or mutual authentication, allowing unauthorized control commands.",
+            "recommendation": "Deploy OT-aware micro-segmentation conduits, industrial firewall rules, and migrate to secure protocol profiles (CIP Security, S7comm TLS, Modbus Security) where supported."
+        },
+        {
+            "id": "FR 2",
+            "name": "Use Control & Mode Authorization (UC)",
+            "standard": "IEC 62443-3-3 SR 2.1 / 2.3",
+            "condition": lambda h: "REMOTE" in str(h.get("keyswitch_mode") or "").upper() or "LEVEL 1" in str(h.get("protection_level") or "").upper(),
+            "risk": "Controllers operating in REMOTE mode or Protection Level 1 allow over-the-network ladder logic overwrites, diagnostic force-coils, and CPU halt commands.",
+            "recommendation": "Enforce physical keyswitch position in RUN (Hard Lock) during active plant production. Configure memory block and DB read/write protection passwords."
+        },
+        {
+            "id": "FR 3",
+            "name": "System Integrity & Vulnerability Management (SI)",
+            "standard": "IEC 62443-4-2 EDR 3.1 / 3.2",
+            "condition": lambda h: any(f.get("severity") in ("Critical", "High") for f in h.get("risks", [])),
+            "risk": "Discovered field devices run vulnerable firmware versions with publicly cataloged CVEs, exposing systems to denial of service, memory corruption, or logic manipulation.",
+            "recommendation": "Establish a validated firmware patch schedule for upcoming plant maintenance turnarounds; enforce virtual patching via deep packet inspection rules."
+        },
+        {
+            "id": "FR 4",
+            "name": "Data Confidentiality & Cleartext Control (DC)",
+            "standard": "IEC 62443-3-3 SR 4.1",
+            "condition": lambda h: any(p.get("protocol") in ("HTTP", "Telnet", "FTP") or p.get("port") in (80, 23, 21)
+                                       for p in h.get("ot_ports", []) if p.get("state", "open") == "open"),
+            "risk": "Unencrypted administrative protocols transmit sensitive industrial setpoints, engineering telemetry, and credentials in plaintext across the LAN.",
+            "recommendation": "Disable plaintext HTTP/Telnet/FTP management services on controllers; enforce encrypted HTTPS/SSH management sessions with strict cipher suites."
+        },
+        {
+            "id": "FR 5",
+            "name": "Restricted Data Flow & Conduit Separation (RDF)",
+            "standard": "IEC 62443-3-2 Zone & Conduit Architecture",
+            "condition": lambda h: len(set(p.get("category") for p in h.get("services", []) if p.get("category"))) > 1
+                                   or any(p.get("port") in (80, 443, 22, 161) for p in h.get("ot_ports", []) if p.get("state", "open") == "open")
+                                   and any(p.get("protocol") in ("S7", "EtherNet/IP", "Modbus") for p in h.get("ot_ports", []) if p.get("state", "open") == "open"),
+            "risk": "Controllers expose dual IT and OT services on the same interface, bridging Level 1 control loops directly with supervisory or plant enterprise networks.",
+            "recommendation": "Enforce ISA-95 zone boundaries; isolate real-time industrial control I/O from general management traffic using dedicated conduits and VLANs."
+        },
+    ]
+
+    matrix = []
+    for r in reqs:
+        affected = [h["ip"] for h in data if r["condition"](h)]
+        if not data:
+            status = "Compliant"
+            status_css = "iec-status-compliant"
+        elif affected:
+            status = "Non-Compliant" if r["id"] in ("FR 1", "FR 2", "FR 3") else "Exposed"
+            status_css = "iec-status-noncompliant" if status == "Non-Compliant" else "iec-status-exposed"
+        else:
+            status = "Compliant"
+            status_css = "iec-status-compliant"
+
+        matrix.append({
+            "id": r["id"],
+            "name": r["name"],
+            "standard": r["standard"],
+            "status": status,
+            "status_css": status_css,
+            "affected_count": len(affected),
+            "affected_hosts": affected,
+            "risk": r["risk"],
+            "recommendation": r["recommendation"],
+        })
+    return matrix
+
+
 # --------------------------------------------------------------------------
 # CSS
 # --------------------------------------------------------------------------
 
 CSS = """
-body{margin:0;background:#e9edf2;color:#1c2733;font-family:-apple-system,"Segoe UI",Helvetica,Arial,sans-serif;font-size:14px;line-height:1.45}
-.page{max-width:1040px;margin:0 auto;padding:28px 34px;background:#fff}
-h1{font-size:26px;margin:0 0 4px;color:#14303f}
-h2{font-size:19px;margin:34px 0 10px;padding-bottom:5px;border-bottom:2px solid #1f3a4d;color:#14303f}
-h3{font-size:15px;margin:18px 0 6px;color:#14303f}
-.sub{color:#5b6b7a;margin:0 0 4px}
-table.data{border-collapse:collapse;width:100%;font-size:13px;margin:8px 0}
-table.data th{background:#1f3a4d;color:#fff;text-align:left;padding:6px 8px;font-weight:600}
-table.data td{border-bottom:1px solid #dde3ea;padding:6px 8px;vertical-align:top}
-table.kv td:first-child{width:200px;color:#5b6b7a;font-weight:600}
-table.tiles{border-collapse:separate;border-spacing:8px;width:100%;margin:6px -8px}
-table.tiles td{background:#f3f6f9;border:1px solid #dde3ea;text-align:center;padding:10px 4px}
-.tile-n{font-size:26px;font-weight:700;color:#14303f}
-.tile-l{font-size:11px;color:#5b6b7a;text-transform:uppercase;letter-spacing:.04em}
-.badge{display:inline-block;padding:1px 8px;border-radius:3px;font-size:11px;font-weight:700;white-space:nowrap}
-.sev-critical{background:#b71c1c;color:#fff}
-.sev-high{background:#e64a19;color:#fff}
-.sev-medium{background:#f9a825;color:#3a2a00}
-.sev-low{background:#1e88e5;color:#fff}
-.sev-info{background:#90a4ae;color:#fff}
-.cov-full{background:#2e7d32;color:#fff}
-.cov-partial{background:#f9a825;color:#3a2a00}
-.cov-limited{background:#c62828;color:#fff}
-.cov-na{background:#b0bec5;color:#263238}
-.det{background:#fff;color:#37474f;border:1px solid #90a4ae}
-.posture{padding:12px 16px;margin:10px 0;font-size:16px;font-weight:700;border-radius:3px}
-.security-posture{background:#f3f6f9;border-left:4px solid #1f3a4d;padding:8px 12px;margin:10px 0;font-size:13px;border-radius:2px}
-.callout{border-left:4px solid #f9a825;background:#fff8e1;padding:10px 14px;margin:14px 0}
-.note{border-left:4px solid #90a4ae;background:#f3f6f9;padding:8px 14px;margin:10px 0;font-size:13px}
-.host{border:1px solid #cfd8e3;margin:20px 0;border-radius:3px}
-.host-head{background:#f3f6f9;padding:10px 14px;border-bottom:1px solid #cfd8e3}
-.host-body{padding:6px 14px 12px}
-.finding{border-left:4px solid #cfd8e3;margin:10px 0;padding:4px 12px}
-.finding.sev-critical-b{border-color:#b71c1c}.finding.sev-high-b{border-color:#e64a19}
-.finding.sev-medium-b{border-color:#f9a825}.finding.sev-low-b{border-color:#1e88e5}
-.muted{color:#5b6b7a}.small{font-size:12px}
-code{background:#eef1f5;padding:1px 4px;border-radius:2px;font-size:12px;word-break:break-all}
-pre{background:#0f1b26;color:#d6e2ee;padding:8px 10px;font-size:11px;white-space:pre-wrap;word-break:break-all;margin:4px 0}
-details{margin:6px 0}summary{cursor:pointer;color:#1f3a4d;font-weight:600}
-a{color:#0b5cad}
-.gap{color:#8a4b00}
-.footer{margin-top:36px;padding-top:10px;border-top:1px solid #cfd8e3;color:#5b6b7a;font-size:12px}
-@media print{body{background:#fff}.page{padding:0;max-width:none}.host{page-break-inside:auto}details>*{display:block}}
+body{margin:0;background:#0f172a;color:#1e293b;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;font-size:14px;line-height:1.5}
+.page{max-width:1120px;margin:24px auto;padding:32px 40px;background:#ffffff;border-radius:10px;box-shadow:0 10px 25px -5px rgba(0,0,0,0.1),0 8px 10px -6px rgba(0,0,0,0.1)}
+h1{font-size:26px;margin:0 0 4px;color:#0f172a;letter-spacing:-.02em}
+h2{font-size:19px;margin:36px 0 12px;padding-bottom:6px;border-bottom:2px solid #0f172a;color:#0f172a;display:flex;align-items:center;justify-content:space-between}
+h3{font-size:15px;margin:20px 0 8px;color:#1e293b}
+.sub{color:#64748b;margin:0 0 6px}
+table.data{border-collapse:collapse;width:100%;font-size:13px;margin:10px 0}
+table.data th{background:#0f172a;color:#f8fafc;text-align:left;padding:8px 10px;font-weight:600;font-size:12px;text-transform:uppercase;letter-spacing:.03em}
+table.data td{border-bottom:1px solid #e2e8f0;padding:8px 10px;vertical-align:top}
+table.data tr:hover td{background:#f8fafc}
+table.kv td:first-child{width:220px;color:#475569;font-weight:600}
+table.tiles{border-collapse:separate;border-spacing:10px;width:100%;margin:10px -10px}
+table.tiles td{background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;text-align:center;padding:12px 6px;box-shadow:0 1px 3px rgba(0,0,0,0.05)}
+.tile-n{font-size:28px;font-weight:700;color:#0f172a}
+.tile-l{font-size:11px;color:#64748b;text-transform:uppercase;letter-spacing:.04em;margin-top:2px;font-weight:600}
+.badge{display:inline-block;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:700;white-space:nowrap}
+.sev-critical{background:#dc2626;color:#fff}
+.sev-high{background:#ea580c;color:#fff}
+.sev-medium{background:#f59e0b;color:#1f2937}
+.sev-low{background:#2563eb;color:#fff}
+.sev-info{background:#64748b;color:#fff}
+.cov-full{background:#16a34a;color:#fff}
+.cov-partial{background:#f59e0b;color:#1f2937}
+.cov-limited{background:#dc2626;color:#fff}
+.cov-na{background:#94a3b8;color:#0f172a}
+.det{background:#f1f5f9;color:#334155;border:1px solid #cbd5e1}
+.posture{padding:14px 18px;margin:12px 0;font-size:16px;font-weight:700;border-radius:6px;display:flex;align-items:center;justify-content:space-between}
+.security-posture{background:#f8fafc;border-left:4px solid #0f172a;padding:10px 14px;margin:10px 0;font-size:13px;border-radius:4px;line-height:1.5}
+.callout{border-left:4px solid #f59e0b;background:#fffbeb;padding:12px 16px;margin:14px 0;border-radius:4px;color:#78350f}
+.note{border-left:4px solid #64748b;background:#f8fafc;padding:10px 14px;margin:10px 0;font-size:13px;border-radius:4px;color:#334155}
+.host{border:1px solid #e2e8f0;margin:24px 0;border-radius:8px;box-shadow:0 1px 3px rgba(0,0,0,0.05);overflow:hidden}
+.host-head{background:#f8fafc;padding:12px 16px;border-bottom:1px solid #e2e8f0;display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:8px}
+.host-body{padding:14px 18px 18px}
+.finding{border-left:4px solid #cbd5e1;margin:12px 0;padding:8px 14px;background:#f8fafc;border-radius:4px}
+.finding.sev-critical-b{border-color:#dc2626}.finding.sev-high-b{border-color:#ea580c}
+.finding.sev-medium-b{border-color:#f59e0b}.finding.sev-low-b{border-color:#2563eb}
+.muted{color:#64748b}.small{font-size:12px}
+code{background:#f1f5f9;color:#0f172a;padding:2px 5px;border-radius:3px;font-size:12px;word-break:break-all}
+pre{background:#0f172a;color:#e2e8f0;padding:10px 14px;font-size:11px;white-space:pre-wrap;word-break:break-all;margin:6px 0;border-radius:6px}
+details{margin:8px 0}summary{cursor:pointer;color:#0f172a;font-weight:600}
+a{color:#0284c7;text-decoration:none}a:hover{text-decoration:underline}
+.gap{color:#b45309}
+.footer{margin-top:40px;padding-top:14px;border-top:1px solid #e2e8f0;color:#64748b;font-size:12px;text-align:center}
+
+/* Navigation Bar */
+.report-nav{background:#0f172a;padding:10px 18px;border-radius:8px;margin-bottom:24px;display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:10px}
+.nav-brand{font-weight:700;color:#38bdf8;font-size:13px;letter-spacing:.05em;text-transform:uppercase}
+.nav-links{display:flex;flex-wrap:wrap;gap:10px}
+.nav-links a{color:#cbd5e1;text-decoration:none;font-size:12px;font-weight:600;padding:3px 8px;border-radius:4px;transition:background .15s}
+.nav-links a:hover{color:#ffffff;background:#1e293b}
+
+/* Executive Header Banner */
+.exec-header{background:linear-gradient(135deg, #0f172a 0%, #1e3a5f 100%);color:#fff;padding:24px 28px;border-radius:8px;margin-bottom:24px}
+.exec-title{font-size:24px;font-weight:700;margin:0 0 4px;letter-spacing:-.02em}
+.exec-sub{font-size:13px;color:#94a3b8;margin:0 0 16px}
+.exec-meta-grid{display:grid;grid-template-columns:repeat(auto-fit, minmax(170px, 1fr));gap:12px;border-top:1px solid #334155;padding-top:14px;font-size:12px}
+.exec-meta-label{color:#94a3b8;text-transform:uppercase;font-size:10px;font-weight:700;letter-spacing:.05em;margin-bottom:2px}
+.exec-meta-val{color:#f8fafc;font-weight:600}
+
+/* Severity Progress Bar */
+.sev-bar-container{margin:14px 0 20px;background:#e2e8f0;border-radius:6px;height:16px;display:flex;overflow:hidden;box-shadow:inset 0 1px 2px rgba(0,0,0,0.1)}
+.sev-bar-seg{height:100%}
+
+/* Purdue Hierarchy Elements */
+.purdue-l1{background:#0284c7;color:#fff}
+.purdue-l1-safety{background:#7c3aed;color:#fff}
+.purdue-l2{background:#059669;color:#fff}
+.purdue-l3{background:#d97706;color:#fff}
+.purdue-na{background:#64748b;color:#fff}
+.purdue-grid{display:grid;grid-template-columns:repeat(auto-fit, minmax(210px, 1fr));gap:12px;margin:12px 0 18px}
+.purdue-card{background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:12px 14px;display:flex;flex-direction:column;justify-content:space-between}
+.purdue-card-header{font-size:11px;font-weight:700;padding:2px 6px;border-radius:4px;display:inline-block;width:fit-content;margin-bottom:6px}
+.purdue-card-val{font-size:22px;font-weight:700;color:#0f172a}
+.purdue-card-desc{font-size:11px;color:#64748b;margin-top:2px}
+
+/* IEC 62443 Compliance Badges */
+.iec-status-noncompliant{background:#fef2f2;color:#991b1b;border:1px solid #fecaca;padding:3px 8px;border-radius:4px;font-weight:700;font-size:11px}
+.iec-status-exposed{background:#fffbeb;color:#92400e;border:1px solid #fde68a;padding:3px 8px;border-radius:4px;font-weight:700;font-size:11px}
+.iec-status-compliant{background:#f0fdf4;color:#166534;border:1px solid #bbf7d0;padding:3px 8px;border-radius:4px;font-weight:700;font-size:11px}
+
+/* Operational Risk Alerts */
+.op-alert{border-left:4px solid;padding:12px 16px;margin:12px 0;border-radius:6px;font-size:13px;line-height:1.45}
+.op-alert-danger{border-color:#dc2626;background:#fef2f2;color:#7f1d1d}
+.op-alert-warning{border-color:#f59e0b;background:#fffbeb;color:#78350f}
+.op-alert-info{border-color:#0284c7;background:#f0f9ff;color:#0c4a6e}
+.op-alert-title{font-weight:700;margin-bottom:4px}
+
+/* Visual Rack Chassis */
+.rack-enclosure{background:#0f172a;border:2px solid #334155;border-radius:8px;padding:14px;margin:14px 0;color:#f8fafc}
+.rack-header{font-weight:700;color:#94a3b8;font-size:12px;margin-bottom:10px;display:flex;justify-content:space-between;border-bottom:1px solid #1e293b;padding-bottom:6px}
+.rack-slots{display:flex;gap:8px;overflow-x:auto;padding-bottom:6px}
+.rack-card{min-width:130px;max-width:145px;background:#1e293b;border:1px solid #334155;border-radius:6px;padding:10px 8px;display:flex;flex-direction:column;justify-content:space-between;font-size:11px}
+.rack-card.is-cpu{border-top:4px solid #38bdf8;background:linear-gradient(180deg,#1e3a5f 0%,#1e293b 100%)}
+.rack-card.is-comm{border-top:4px solid #34d399;background:linear-gradient(180deg,#134e4a 0%,#1e293b 100%)}
+.rack-card.is-io{border-top:4px solid #94a3b8;background:linear-gradient(180deg,#334155 0%,#1e293b 100%)}
+.rack-slot-label{font-size:10px;font-weight:700;color:#94a3b8;margin-bottom:4px}
+.rack-slot-model{font-size:12px;font-weight:700;color:#f8fafc;word-break:break-all}
+.rack-slot-type{font-size:10px;color:#cbd5e1;margin:4px 0}
+.rack-slot-fw{font-size:10px;color:#94a3b8}
+.rack-led{display:inline-block;width:6px;height:6px;border-radius:50%;background:#4ade80;box-shadow:0 0 5px #4ade80;margin-right:4px}
+
+@media print{
+  body{background:#fff !important;padding:0}
+  .page{max-width:none;box-shadow:none;padding:0;margin:0}
+  .report-nav{display:none !important}
+  h2{page-break-before:always}
+  h2:first-of-type{page-break-before:avoid}
+  table,tr,td,th{page-break-inside:avoid}
+  .host{page-break-inside:avoid}
+  details>*{display:block}
+}
 """
 
 
@@ -177,14 +337,51 @@ def _posture(counts):
     return "No findings among the checks that could be performed - see Coverage", "sev-info"
 
 
+def _render_executive_header(ctx, target, snapshot_timestamp):
+    now = datetime.now().astimezone()
+    tz_name = now.strftime("%Z") or now.strftime("%z")
+    generated = now.strftime(f"%Y-%m-%d %H:%M ({tz_name})")
+
+    out = [
+        '<div class="exec-header">',
+        '<div class="exec-title">OT / ICS Cybersecurity Assessment Report</div>',
+        '<div class="exec-sub">Industrial Network Reconnaissance, Hardware Inventory &amp; Risk Audit</div>',
+        '<div class="exec-meta-grid">',
+        f'<div class="exec-meta-item"><span class="exec-meta-label">Target Scope</span><span class="exec-meta-val">{_e(target or "Subnet scan")}</span></div>',
+        f'<div class="exec-meta-item"><span class="exec-meta-label">Assessment Operator</span><span class="exec-meta-val">{_e(ctx.get("operator") or "Operator")}</span></div>',
+        f'<div class="exec-meta-item"><span class="exec-meta-label">Pacing Profile</span><span class="exec-meta-val">{_e((ctx.get("profile") or {}).get("name", "safe").capitalize())}</span></div>',
+        f'<div class="exec-meta-item"><span class="exec-meta-label">Generated Timestamp</span><span class="exec-meta-val">{_e(generated)}</span></div>',
+        '</div></div>',
+    ]
+    return "".join(out)
+
+
+def _render_nav_bar():
+    return (
+        '<div class="report-nav">'
+        '<div class="nav-brand">OT-RECON &middot; ICS Assessment</div>'
+        '<div class="nav-links">'
+        '<a href="#section-exec">Executive Summary</a>'
+        '<a href="#section-methodology">Scope &amp; Methodology</a>'
+        '<a href="#section-inventory">Asset Inventory</a>'
+        '<a href="#section-iec62443">IEC 62443 Matrix</a>'
+        '<a href="#section-remediation">Remediation Plan</a>'
+        '<a href="#section-coverage">Coverage &amp; Limitations</a>'
+        '<a href="#section-hosts">Detailed Host Assessments</a>'
+        '<a href="#section-appendix">Appendix</a>'
+        '</div></div>'
+    )
+
+
 def _section_summary(data, ctx):
     counts = _severity_counts(data)
     label, css = _posture(counts)
     ot_hosts = sum(1 for h in data if h.get("type") not in (None, "Unknown"))
+    l1_hosts = sum(1 for h in data if _purdue_level(h.get("type"))[0].startswith("L1"))
     cov = (ctx.get("coverage") or {}).get("host_status_counts")
     gap_hosts = (cov.get("partial", 0) + cov.get("limited", 0)) if cov else None
 
-    out = ['<h2>1. Executive Summary</h2>',
+    out = ['<h2 id="section-exec">1. Executive Summary</h2>',
            f'<div class="posture {css}">{_e(label)}</div>']
 
     tiles = [
@@ -198,6 +395,50 @@ def _section_summary(data, ctx):
     out.append('<table class="tiles"><tr>' + "".join(
         f'<td><div class="tile-n">{_e(n)}</div><div class="tile-l">{_e(l)}</div></td>' for n, l in tiles
     ) + '</tr></table>')
+
+    # Severity distribution bar
+    total_findings = sum(counts.values())
+    if total_findings > 0:
+        c_pct = (counts["Critical"] / total_findings) * 100
+        h_pct = (counts["High"] / total_findings) * 100
+        m_pct = (counts["Medium"] / total_findings) * 100
+        l_pct = (counts["Low"] / total_findings) * 100
+        out.append(
+            '<div class="sev-bar-container">'
+            f'<div class="sev-bar-seg sev-critical" style="width:{c_pct:.1f}%" title="Critical: {counts["Critical"]}"></div>'
+            f'<div class="sev-bar-seg sev-high" style="width:{h_pct:.1f}%" title="High: {counts["High"]}"></div>'
+            f'<div class="sev-bar-seg sev-medium" style="width:{m_pct:.1f}%" title="Medium: {counts["Medium"]}"></div>'
+            f'<div class="sev-bar-seg sev-low" style="width:{l_pct:.1f}%" title="Low: {counts["Low"]}"></div>'
+            '</div>'
+        )
+
+    # Purdue Model Distribution
+    levels = Counter()
+    for h in data:
+        p_name, _ = _purdue_level(h.get("type"))
+        levels[p_name] += 1
+
+    out.append('<h3>Purdue Model Asset Hierarchy (ISA-95 Distribution)</h3>')
+    out.append('<div class="purdue-grid">')
+    purdue_cards = [
+        ("Level 1: Basic Control & Field", "PLCs, Safety Systems, Remote I/O",
+         levels["L1: Basic Control (PLC)"] + levels["L1: Safety / SIS"] + levels["L1: Field Device / I/O"], "purdue-l1"),
+        ("Level 2: Supervisory Control", "Operator Panels, HMIs, SCADA",
+         levels["L2: Supervisory (HMI)"], "purdue-l2"),
+        ("Level 3: Operations Infrastructure", "Historians, Industrial Servers",
+         levels["L3: Operations Infrastructure"], "purdue-l3"),
+        ("Level 0 / Unclassified Hosts", "IT-side & General Network Hosts",
+         levels["Unclassified / IT Host"], "purdue-na"),
+    ]
+    for p_title, p_desc, p_count, p_css in purdue_cards:
+        out.append(
+            f'<div class="purdue-card">'
+            f'<div class="purdue-card-header {p_css}">{_e(p_title)}</div>'
+            f'<div class="purdue-card-val">{_e(p_count)} <span style="font-size:12px;font-weight:400;color:#64748b">asset(s)</span></div>'
+            f'<div class="purdue-card-desc">{_e(p_desc)}</div>'
+            f'</div>'
+        )
+    out.append('</div>')
 
     if gap_hosts:
         out.append(
@@ -225,7 +466,7 @@ def _section_summary(data, ctx):
 
 
 def _section_methodology(ctx):
-    out = ['<h2>2. Scope &amp; Methodology</h2>']
+    out = ['<h2 id="section-methodology">2. Scope &amp; Methodology</h2>']
 
     if not ctx:
         out.append('<div class="note">Scan metadata was not recorded for this report (the snapshot was created '
@@ -275,11 +516,11 @@ def _section_methodology(ctx):
 
 
 def _section_inventory(data):
-    out = ['<h2>3. Asset Inventory</h2>']
+    out = ['<h2 id="section-inventory">3. Asset Inventory</h2>']
     if not data:
         return out[0] + '<p class="muted">No hosts were discovered.</p>'
 
-    out.append('<table class="data"><tr><th>Host</th><th>Type</th><th>Vendor</th><th>Model</th><th>Firmware</th>'
+    out.append('<table class="data"><tr><th>Host</th><th>Purdue Level</th><th>Type</th><th>Vendor</th><th>Model</th><th>Firmware</th>'
                '<th>Services</th><th>Risk</th><th>Coverage</th></tr>')
     for h in _sorted_hosts(data):
         protos = list(dict.fromkeys(
@@ -289,13 +530,45 @@ def _section_inventory(data):
         risk = (_sev_badge(sev) + f' {_e(h.get("risk_score"))}') if sev and sev != "None" else '<span class="muted">none</span>'
         cstat = (h.get("coverage") or {}).get("status")
         cov = _badge(COVERAGE_LABEL[cstat], COVERAGE_CLASS[cstat]) if cstat in COVERAGE_LABEL else '<span class="muted">not recorded</span>'
+        p_label, p_css = _purdue_level(h.get("type"))
         out.append(
-            f'<tr><td><a href="#{_anchor(h["ip"])}">{_e(h.get("ip"))}</a></td><td>{_e(h.get("type"))}</td>'
+            f'<tr><td><a href="#{_anchor(h["ip"])}">{_e(h.get("ip"))}</a></td>'
+            f'<td>{_badge(p_label, p_css)}</td>'
+            f'<td>{_e(h.get("type"))}</td>'
             f'<td>{_e(h.get("vendor") or "-")}</td><td>{_e(h.get("model") or "-")}</td>'
             f'<td>{_e(h.get("firmware") or "-")}</td><td>{_e(", ".join(protos) or "-")}</td>'
             f'<td>{risk}</td><td>{cov}</td></tr>'
         )
     out.append("</table>")
+    return "".join(out)
+
+
+def _section_iec62443(data):
+    matrix = _compute_iec62443_matrix(data)
+    out = [
+        '<h2 id="section-iec62443">IEC 62443 Security Posture &amp; Compliance</h2>',
+        '<p class="muted">Alignment of discovered asset exposures and control architectures against '
+        '<b>IEC 62443-3-3</b> (System Security Requirements) and <b>IEC 62443-4-2</b> (Technical Security Requirements for IACS Components).</p>',
+        '<table class="data">',
+        '<tr><th>Requirement</th><th>Standard Ref</th><th>Compliance Status</th><th>Affected Assets</th><th>Primary Risk &amp; Recommended Engineering Controls</th></tr>'
+    ]
+    for row in matrix:
+        affected_links = ", ".join(f'<a href="#{_anchor(ip)}">{_e(ip)}</a>' for ip in row["affected_hosts"][:6])
+        if len(row["affected_hosts"]) > 6:
+            affected_links += f' <span class="small muted">+{len(row["affected_hosts"]) - 6} more</span>'
+        if not affected_links:
+            affected_links = '<span class="muted">None identified</span>'
+
+        out.append(
+            f'<tr>'
+            f'<td><b>{_e(row["id"])}</b><br><span class="small">{_e(row["name"])}</span></td>'
+            f'<td><code>{_e(row["standard"])}</code></td>'
+            f'<td><span class="{_e(row["status_css"])}">{_e(row["status"])}</span></td>'
+            f'<td><b>{row["affected_count"]}</b><br><span class="small">{affected_links}</span></td>'
+            f'<td><b>Risk:</b> {_e(row["risk"])}<br><div style="margin-top:4px;color:#0284c7"><b>Control:</b> {_e(row["recommendation"])}</div></td>'
+            f'</tr>'
+        )
+    out.append('</table>')
     return "".join(out)
 
 
@@ -314,7 +587,7 @@ def _remediation_groups(data):
 
 
 def _section_remediation(data):
-    out = ['<h2>4. Remediation Plan</h2>']
+    out = ['<h2 id="section-remediation">4. Remediation Plan</h2>']
     groups = _remediation_groups(data)
     if not groups:
         return out[0] + '<p class="muted">No findings to remediate.</p>'
@@ -337,7 +610,7 @@ def _section_remediation(data):
 
 
 def _section_coverage(data, ctx):
-    out = ['<h2>5. Coverage &amp; Limitations</h2>',
+    out = ['<h2 id="section-coverage">5. Coverage &amp; Limitations</h2>',
            '<p>A report that lists only what was found invites the conclusion that everything else is fine. '
            'This section states what could <b>not</b> be assessed.</p>']
 
@@ -392,25 +665,100 @@ def _render_finding(f):
     return "".join(out)
 
 
+def _render_visual_chassis(h):
+    chassis = h.get("chassis_modules")
+    if not chassis:
+        return ""
+
+    out = [
+        '<div class="rack-enclosure">',
+        '<div class="rack-header">',
+        f'<span><b>Modular Chassis Rack:</b> {_e(h.get("model", "Chassis Adapter"))} ({_e(h.get("ip"))})</span>',
+        f'<span>{len(chassis)} Module(s) Enumerated</span>',
+        '</div>',
+        '<div class="rack-slots">',
+    ]
+
+    for m in chassis:
+        dtype = m.get("device_type", "")
+        is_cpu = "Programmable Logic Controller" in dtype
+        is_comm = "Communications Adapter" in dtype or "Adapter" in dtype
+        card_class = "is-cpu" if is_cpu else ("is-comm" if is_comm else "is-io")
+        badge_text = "CPU" if is_cpu else ("COMM" if is_comm else "I/O")
+        badge_css = "sev-low" if is_cpu else ("sev-info" if is_comm else "det")
+
+        out.append(
+            f'<div class="rack-card {card_class}">'
+            f'<div>'
+            f'<div class="rack-slot-label"><span class="rack-led"></span>SLOT {m.get("slot", 0)} '
+            f'<span class="badge {badge_css}">{badge_text}</span></div>'
+            f'<div class="rack-slot-model">{_e(m.get("model", "-"))}</div>'
+            f'<div class="rack-slot-type">{_e(m.get("device_type", "-"))}</div>'
+            f'</div>'
+            f'<div class="rack-slot-fw">FW: {_e(m.get("firmware", "N/A"))}</div>'
+            f'</div>'
+        )
+
+    out.append('</div></div>')
+    return "".join(out)
+
+
 def _render_host(h):
     cov = h.get("coverage") or {}
     cstat = cov.get("status")
     sev = h.get("risk_severity")
+    p_label, p_css = _purdue_level(h.get("type"))
+
     head = [f'<div class="host" id="{_anchor(h["ip"])}"><div class="host-head">'
-            f'<b style="font-size:16px">{_e(h.get("ip"))}</b> &nbsp;{_e(h.get("type"))} '
+            f'<div><b style="font-size:16px">{_e(h.get("ip"))}</b> &nbsp;'
+            f'{_badge(p_label, p_css)} &nbsp;{_e(h.get("type"))} '
             f'&middot; {_e(" ".join(x for x in (h.get("vendor"), h.get("model")) if x) or "vendor unknown")}'
-            f'{" &middot; fw " + _e(h["firmware"]) if h.get("firmware") else ""} &nbsp;']
+            f'{" &middot; fw " + _e(h["firmware"]) if h.get("firmware") else ""}</div><div>']
     if sev and sev != "None":
         head.append(f'{_sev_badge(sev)} <b>{_e(h.get("risk_score"))}/100</b> ')
     if cstat in COVERAGE_LABEL:
         head.append(f'Coverage: {_badge(COVERAGE_LABEL[cstat], COVERAGE_CLASS[cstat])}')
-    head.append("</div><div class=\"host-body\">")
+    head.append("</div></div><div class=\"host-body\">")
     out = ["".join(head)]
 
     if h.get("summary"):
         out.append(f'<p class="muted">{_e(h["summary"])}</p>')
 
-    # Deep Inspection & Security Posture (Native S7/CIP SZL Inspection)
+    # High-Impact Operational Alerts
+    alerts = []
+    if h.get("keyswitch_mode"):
+        kw = str(h["keyswitch_mode"])
+        if "REMOTE" in kw.upper():
+            alerts.append(
+                '<div class="op-alert op-alert-danger">'
+                '<div class="op-alert-title">⚠️ Operational Risk: CPU Keyswitch in REMOTE RUN Mode</div>'
+                'The controller keyswitch is set to <b>REMOTE RUN</b>, allowing unauthenticated ladder logic overwrites, '
+                'program downloads, and remote CPU state transitions (STOP/PAUSE) over the network without physical cabinet access. '
+                'Per <b>NIST SP 800-82 / IEC 62443</b>, rotate physical keyswitch to <b>RUN (Hard Lock)</b> during normal plant operation.'
+                '</div>'
+            )
+        elif kw.upper() == "RUN":
+            alerts.append(
+                '<div class="op-alert op-alert-info">'
+                '<div class="op-alert-title">🔒 Physical Lock: CPU Keyswitch in RUN (Hard Lock)</div>'
+                'The controller keyswitch is physically set to RUN mode. Remote logic uploads and program modifications across the network are hardware-inhibited.'
+                '</div>'
+            )
+
+    if h.get("protection_level"):
+        prot = str(h["protection_level"])
+        if "Level 1" in prot or "Open" in prot or "No Protection" in prot:
+            alerts.append(
+                '<div class="op-alert op-alert-warning">'
+                '<div class="op-alert-title">⚠️ Access Control Warning: Controller Protection Level 1 (Open / Unrestricted)</div>'
+                'PLC memory blocks, data blocks (DBs), and I/O image registers are accessible without password restriction. '
+                'Any device on this network conduit can issue read/write requests.'
+                '</div>'
+            )
+    if alerts:
+        out.append("".join(alerts))
+
+    # Deep Inspection & Security Posture Card (Native S7/CIP SZL Inspection)
     if h.get("keyswitch_mode") or h.get("protection_level") or h.get("mlfb") or h.get("component_name"):
         sp = ['<div class="security-posture"><b>Deep Protocol Inspection &amp; Security Posture:</b><br>']
         if h.get("keyswitch_mode"):
@@ -432,6 +780,9 @@ def _render_host(h):
     if h.get("chassis_modules"):
         chassis = h["chassis_modules"]
         out.append('<h3>Chassis / Backplane Rack Layout</h3>')
+        # Visual rack cards
+        out.append(_render_visual_chassis(h))
+        # Detailed structured data table
         out.append('<table class="data"><tr><th>Slot</th><th>Module Model</th><th>Device Type</th><th>Firmware</th></tr>')
         for m in chassis:
             is_cpu = "Programmable Logic Controller" in m.get("device_type", "")
@@ -493,7 +844,7 @@ def _render_host(h):
 
 
 def _section_hosts(data):
-    out = ['<h2>6. Detailed Findings by Host</h2>']
+    out = ['<h2 id="section-hosts">6. Detailed Findings by Host</h2>']
     relevant = [h for h in _sorted_hosts(data) if _is_ot_relevant(h)]
     others = [h for h in _sorted_hosts(data) if not _is_ot_relevant(h)]
     if not data:
@@ -507,7 +858,7 @@ def _section_hosts(data):
 
 
 def _section_changes(diff, previous_timestamp):
-    out = ['<h2>7. Changes Since the Previous Scan</h2>']
+    out = ['<h2 id="section-changes">7. Changes Since the Previous Scan</h2>']
     if diff is None:
         return out[0] + '<p class="muted">No previous scan was available to compare against.</p>'
 
@@ -546,7 +897,7 @@ def _section_appendix():
     weights = ", ".join(f"{k} = {v}" for k, v in SEVERITY_WEIGHTS.items())
     mult = ", ".join(f"{k} x{v}" for k, v in ASSET_MULTIPLIERS.items())
     return (
-        '<h2>Appendix: Definitions</h2>'
+        '<h2 id="section-appendix">Appendix: Definitions</h2>'
         '<table class="data kv">'
         f'<tr><td>Risk score (0-100)</td><td>Sum of finding weights ({_e(weights)}), multiplied by an asset-criticality '
         f'factor ({_e(mult)}; other types x1.0), capped at 100. It ranks hosts for triage; it is not a '
@@ -556,7 +907,11 @@ def _section_appendix():
         '<tr><td>Priority P1-P5</td><td>Relative remediation order only (P1 first).</td></tr>'
         '<tr><td>Coverage</td><td><b>Full</b>: assessed with no gaps. <b>Partial</b>: assessed but some checks could '
         'not run. <b>Limited</b>: OT services present but nothing authoritative was learned. '
-        '<b>No OT services</b>: OT checks do not apply.</td></tr></table>'
+        '<b>No OT services</b>: OT checks do not apply.</td></tr>'
+        '<tr><td>Purdue Model (ISA-95)</td><td><b>Level 1</b>: Basic control (PLCs, SIS, Remote I/O). '
+        '<b>Level 2</b>: Area supervisory (HMIs, SCADA). <b>Level 3</b>: Operations infrastructure (Historians, Engineering).</td></tr>'
+        '<tr><td>IEC 62443 Alignment</td><td>Industrial automation cybersecurity requirements (3-3 System &amp; 4-2 Component requirements).</td></tr>'
+        '</table>'
         '<h3>Limitations</h3><p class="small">Results reflect the network as reachable from the scanning host at the '
         'time of the scan; a different vantage point may expose different services. Vulnerability matching uses a '
         'curated local database (and NVD when enabled) and is not exhaustive. Firmware-dependent checks are '
@@ -571,26 +926,22 @@ def _section_appendix():
 
 def render_html(data, scan_ctx=None, diff=None, previous_timestamp=None, snapshot_timestamp=None):
     ctx = scan_ctx or {}
-    now = datetime.now().astimezone()
-    tz_name = now.strftime("%Z") or now.strftime("%z")
-    generated = now.strftime(f"%Y-%m-%d %H:%M ({tz_name})")
     target = ctx.get("target")
 
     body = [
-        f'<h1>OT Network Assessment Report</h1>'
-        f'<p class="sub">{_e("Target: " + str(target)) if target else "Target: not recorded"}'
-        f'{" &middot; Scan: " + _e(snapshot_timestamp) if snapshot_timestamp else ""}</p>'
-        f'<p class="sub small">Generated {_e(generated)} by OT-Recon v{_e(ctx.get("tool_version") or __version__)}</p>',
+        _render_nav_bar(),
+        _render_executive_header(ctx, target, snapshot_timestamp),
         _section_summary(data, ctx),
         _section_methodology(scan_ctx),
         _section_inventory(data),
+        _section_iec62443(data),
         _section_remediation(data),
         _section_coverage(data, ctx),
         _section_hosts(data),
         _section_changes(diff, previous_timestamp),
         _section_appendix(),
-        '<div class="footer">Generated by OT-Recon. Contains asset and vulnerability information - '
-        'handle according to your organisation\'s data-classification policy.</div>',
+        '<div class="footer">Generated by OT-Recon. Contains industrial asset and security vulnerability data &mdash; '
+        'handle in strict accordance with your organisation\'s cybersecurity data classification policy.</div>',
     ]
 
     return (

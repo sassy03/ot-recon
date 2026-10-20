@@ -326,3 +326,89 @@ def test_html_renders_security_posture_and_chassis_modules():
     assert "Slot 1" in out
 
 
+def test_html_renders_purdue_hierarchy_and_badges():
+    hosts = [
+        _host(ip="10.0.0.1", type="PLC"),
+        _host(ip="10.0.0.2", type="Safety PLC"),
+        _host(ip="10.0.0.3", type="HMI"),
+        _host(ip="10.0.0.4", type="Industrial Server"),
+    ]
+    out = render_html(hosts, scan_ctx=_ctx())
+    assert "Purdue Model Asset Hierarchy" in out
+    assert "Level 1: Basic Control" in out
+    assert "Level 2: Supervisory" in out
+    assert "Level 3: Operations" in out
+    assert "purdue-l1" in out
+    assert "purdue-l1-safety" in out
+    assert "purdue-l2" in out
+    assert "purdue-l3" in out
+
+
+def test_html_renders_iec62443_compliance_matrix():
+    host = _host(
+        ip="10.0.0.1",
+        ot_ports=[{"port": 502, "state": "open", "protocol": "Modbus"}],
+        keyswitch_mode="REMOTE RUN",
+        protection_level="Level 1 (No Protection)",
+        risks=[_finding(severity="High")],
+    )
+    out = render_html([host], scan_ctx=_ctx())
+    assert "IEC 62443 Security Posture &amp; Compliance" in out
+    assert "FR 1" in out
+    assert "Identification &amp; Authentication Control" in out
+    assert "FR 2" in out
+    assert "Use Control" in out
+    assert "FR 3" in out
+    assert "System Integrity" in out
+    assert "iec-status-noncompliant" in out
+
+
+def test_html_renders_visual_chassis_rack():
+    host = _host(
+        ip="10.0.0.10",
+        model="1756-EN2T",
+        chassis_modules=[
+            {"slot": 0, "model": "1756-L72", "device_type": "Programmable Logic Controller", "firmware": "32.11"},
+            {"slot": 1, "model": "1756-EN2T", "device_type": "Communications Adapter", "firmware": "5.08"},
+            {"slot": 2, "model": "1756-IB16", "device_type": "General Purpose Discrete I/O", "firmware": "3.01"},
+        ],
+    )
+    out = render_html([host], scan_ctx=_ctx())
+    assert "rack-enclosure" in out
+    assert "rack-slots" in out
+    assert "is-cpu" in out
+    assert "is-comm" in out
+    assert "is-io" in out
+    assert "SLOT 0" in out
+    assert "SLOT 1" in out
+    assert "SLOT 2" in out
+    assert "1756-IB16" in out
+
+
+def test_html_renders_operational_risk_alerts():
+    host = _host(
+        ip="10.0.0.5",
+        keyswitch_mode="REMOTE RUN",
+        protection_level="Level 1 (No Protection / Open)",
+    )
+    out = render_html([host], scan_ctx=_ctx())
+    assert "op-alert op-alert-danger" in out
+    assert "CPU Keyswitch in REMOTE RUN Mode" in out
+    assert "Hard Lock" in out
+    assert "Controller Protection Level 1" in out
+
+
+def test_html_renders_executive_header_and_navigation():
+    out = render_html([_host()], scan_ctx=_ctx(target="192.168.10.0/24", operator="SecOps"))
+    assert "report-nav" in out
+    assert "exec-header" in out
+    assert "OT / ICS Cybersecurity Assessment Report" in out
+    assert "192.168.10.0/24" in out
+    assert "SecOps" in out
+    assert "#section-exec" in out
+    assert "#section-inventory" in out
+    assert "#section-iec62443" in out
+    assert "#section-remediation" in out
+
+
+
